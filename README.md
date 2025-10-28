@@ -1,9 +1,7 @@
 # 🌐 计算机网络实验 Lab for 本硕博，智科，大数据
 
-[![GitHub stars](https://img.shields.io/github/stars/yourusername/lab?style=social)](https://github.com/yourusername/lab)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Python](https://img.shields.io/badge/python-3.6+-blue.svg)](https://www.python.org/)
-[![Mininet](https://img.shields.io/badge/mininet-2.3.0-green.svg)](http://mininet.org/)
+
 
 > 📚 **完整的计算机网络实验集合**，涵盖网络拓扑构建、SDN 控制器、流表配置等核心内容
 
