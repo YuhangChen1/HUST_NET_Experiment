@@ -34,7 +34,16 @@ class NetworkAwareness(app_manager.OSKenApp):
         self.topo_thread = hub.spawn(self._get_topology)
 
         self.weight = 'hop' # don't forget change it to 'delay'
-        # add your variables here
+        
+        # Task 2: Add variables for delay measurement
+        self.lldp_delay_table = {}    # (src_dpid, dst_dpid) -> T_lldp
+        self.switches = {}             # switches app instance
+        self.echo_RTT_table = {}       # dpid -> T_echo
+        self.echo_send_timestamp = {}  # dpid -> send_time
+        self.link_delay_table = {}     # (dpid1, dpid2) -> delay
+        
+        # Start Echo measurement thread
+        self.echo_thread = hub.spawn(self.examine_echo_RTT)
 
 
     def add_flow(self, datapath, priority, match, actions):
@@ -67,6 +76,101 @@ class NetworkAwareness(app_manager.OSKenApp):
 
         if ev.state == DEAD_DISPATCHER:
             del self.switch_info[dpid]
+    
+    @set_ev_cls(ofp_event.EventOFPPacketIn, MAIN_DISPATCHER)
+    def packet_in_handler(self, ev):
+        """Handle LLDP packets to get LLDP delay"""
+        msg = ev.msg
+        dpid = msg.datapath.id
+        
+        try:
+            src_dpid, src_port_no = LLDPPacket.lldp_parse(msg.data)
+            
+            # Get switches instance (only once)
+            if not self.switches:
+                self.switches = lookup_service_brick('switches')
+            
+            # Get LLDP delay from switches instance
+            for port in self.switches.ports.keys():
+                if src_dpid == port.dpid and src_port_no == port.port_no:
+                    # Save T_lldp
+                    self.lldp_delay_table[(src_dpid, dpid)] = \
+                        self.switches.ports[port].delay
+                    break
+        except:
+            return
+    
+    def send_echo_request(self, switch):
+        """Send Echo request to a switch"""
+        datapath = switch.dp
+        parser = datapath.ofproto_parser
+        dpid = datapath.id
+        
+        # Record send time
+        send_time = time.time()
+        self.echo_send_timestamp[dpid] = send_time
+        
+        # Construct Echo request (data must be bytes)
+        data = str(send_time).encode('utf-8')
+        echo_req = parser.OFPEchoRequest(datapath, data=data)
+        
+        # Send
+        datapath.send_msg(echo_req)
+    
+    @set_ev_cls(ofp_event.EventOFPEchoReply, MAIN_DISPATCHER)
+    def handle_echo_reply(self, ev):
+        """Handle Echo reply and calculate T_echo"""
+        try:
+            msg = ev.msg
+            datapath = msg.datapath
+            dpid = datapath.id
+            
+            # Record receive time
+            recv_time = time.time()
+            
+            # Get send time
+            send_time = self.echo_send_timestamp.get(dpid)
+            if send_time:
+                # Calculate Echo RTT
+                self.echo_RTT_table[dpid] = recv_time - send_time
+        except Exception as e:
+            self.logger.warning(f"Failed to handle echo reply: {e}")
+    
+    def examine_echo_RTT(self):
+        """Periodically measure Echo RTT"""
+        while True:
+            # Get all switches
+            switches = get_all_switch(self)
+            
+            # Send Echo to each switch
+            for switch in switches:
+                self.send_echo_request(switch)
+            
+            # Sleep (use hub.sleep to reduce impact)
+            hub.sleep(SEND_ECHO_REQUEST_INTERVAL)
+    
+    def calculate_link_delay(self, src_dpid, dst_dpid):
+        """
+        Calculate link delay
+        Formula: delay = max((T_lldp12 + T_lldp21 - T_echo1 - T_echo2) / 2, 0)
+        """
+        try:
+            # Get LLDP delay
+            lldp_12 = self.lldp_delay_table.get((src_dpid, dst_dpid), 0)
+            lldp_21 = self.lldp_delay_table.get((dst_dpid, src_dpid), 0)
+            
+            # Get Echo RTT
+            echo_1 = self.echo_RTT_table.get(src_dpid, 0)
+            echo_2 = self.echo_RTT_table.get(dst_dpid, 0)
+            
+            # Calculate link delay
+            delay = (lldp_12 + lldp_21 - echo_1 - echo_2) / 2
+            
+            # Ensure non-negative
+            return max(delay, 0)
+        except KeyError:
+            # Link discovery and delay calculation are asynchronous
+            return 0
     def _get_topology(self):
         _hosts, _switches, _links = None, None, None
         while True:
@@ -104,14 +208,24 @@ class NetworkAwareness(app_manager.OSKenApp):
                 self.link_info[(link.dst.dpid, link.src.dpid)] = link.dst.port_no
 
                 # Calculate link delay
-                '''
-                TODO：
-                	计算链路delay
-                	将delay存入link_delay_table
-                	使用self.logger.info打印delay消息
-                '''
+                delay = self.calculate_link_delay(link.src.dpid, link.dst.dpid)
                 
-                self.topo_map.add_edge(link.src.dpid, link.dst.dpid, hop=1, is_host=False)
+                # Store delay in link_delay_table
+                self.link_delay_table[(link.src.dpid, link.dst.dpid)] = delay
+                
+                # Print delay message
+                self.logger.info(
+                    "Link: %s -> %s, delay: %.5fms",
+                    link.src.dpid, link.dst.dpid, delay * 1000
+                )
+                
+                # Add edge to topo_map with delay attribute
+                self.topo_map.add_edge(
+                    link.src.dpid, link.dst.dpid, 
+                    hop=1, 
+                    delay=delay,
+                    is_host=False
+                )
 
             if self.weight == 'hop' or self.weight == 'delay':
                 self.show_topo_map()

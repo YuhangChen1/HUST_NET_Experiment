@@ -34,13 +34,56 @@
 
 ---
 
-### Lab 3: [敬请期待...] 🚧
-
-敬请期待...
-
+### Lab 3: SDN 链路选择与故障恢复实验 ✅
 👉 **[查看 Lab 3 详细指南](lab3/README.md)**
 
-敬请期待...
+1. 📖 先阅读 [QUICKSTART.md](lab3/QUICKSTART.md) 快速上手
+2. 🔧 必读 [OSKEN_MODIFICATION.md](lab3/OSKEN_MODIFICATION.md) 修改 OS-Ken 源文件
+3. 📝 查看 [CHANGES_SUMMARY.md](lab3/CHANGES_SUMMARY.md) 了解代码修改
+4. 📋 使用 [REPORT_TEMPLATE.md](lab3/REPORT_TEMPLATE.md) 撰写报告
+
+**核心内容**：通过 LLDP 协议实现链路发现和时延测量，实现动态路径选择和故障容错
+
+**技术栈**：
+- 📡 **LLDP 协议** - 链路层发现协议
+- 🎮 **OS-Ken 控制器** - OpenFlow SDN 控制器
+- 📊 **NetworkX** - 图算法库
+- ⏱️ **Echo 消息** - 时延测量
+- 🔧 **Mininet** - 网络仿真器
+
+**实验任务**：
+1. **任务一**：基于最少跳数的路径选择
+   - 理解 LLDP 拓扑发现机制
+   - 使用 NetworkX 计算最短路径
+   - 处理 ARP 环路问题
+
+2. **任务二**：基于最小时延的路径选择
+   - LLDP 时延测量（T<sub>lldp</sub>）
+   - Echo RTT 测量（T<sub>echo</sub>）
+   - 计算链路单向时延
+   - 动态选择最优路径
+
+3. **任务三**：链路故障容忍与自动恢复
+   - 捕获 `EventOFPPortStatus` 事件
+   - 自动检测链路故障
+   - 动态切换备用路径
+   - 故障恢复后自动回切
+
+**Lab 3 结构：**
+```
+lab3/
+├── README.md                   # 📘 详细的实验指南（1351 行）
+├── QUICKSTART.md               # 🚀 快速开始指南（3 个任务的运行步骤）
+├── OSKEN_MODIFICATION.md       # 🔧 OS-Ken 源文件修改说明
+├── CHANGES_SUMMARY.md          # 📝 代码修改详细总结
+├── COMPLETION_SUMMARY.md       # ✅ 完成情况总结和代码统计
+├── REPORT_TEMPLATE.md          # 📋 实验报告模板（含思考题）
+├── least_hops.py               # ✅ 任务一：最少跳数路径
+├── shortest_delay.py           # ✅ 任务二+三：最小时延路径和故障容忍
+├── network_awareness.py        # 📡 拓扑发现和链路时延测量
+├── topo.py                     # 🌐 实验拓扑（9 台交换机）
+└── setup.sh                    # 🔨 环境设置脚本
+```
 
 ## 🚀 快速开始
 
@@ -97,6 +140,29 @@ sudo ./topo_1.py
 ```
 🎉 **实现交换机自学习功能！**
 
+**Lab 3（链路选择与故障恢复）：**
+```bash
+cd lab3
+source setup.sh  # 一键设置环境
+
+# 任务一：最少跳数路径
+# 终端 1：
+sudo ./topo.py
+# 终端 2：
+uv run osken-manager least_hops.py --observe-links
+# Mininet: h2 ping h9
+
+# 任务二+三：最小时延路径和故障容忍
+# 终端 1：
+sudo ./topo.py
+# 终端 2：
+uv run osken-manager shortest_delay.py --observe-links
+# Mininet: h2 ping h9
+# Mininet: link s6 s7 down  (测试故障切换)
+# Mininet: link s6 s7 up    (测试故障恢复)
+```
+🎉 **实现动态路径选择和自动故障恢复！**
+
 ---
 
 ## 📖 使用指南
@@ -127,6 +193,22 @@ lab2/
 └── instruction.md              # 📖 详细操作指南
 ```
 
+**Lab 3 结构：**
+```
+lab3/
+├── README.md                   # 📘 详细的实验指南（1351 行）
+├── QUICKSTART.md               # 🚀 快速开始指南（3 个任务的运行步骤）
+├── OSKEN_MODIFICATION.md       # 🔧 OS-Ken 源文件修改说明
+├── CHANGES_SUMMARY.md          # 📝 代码修改详细总结
+├── COMPLETION_SUMMARY.md       # ✅ 完成情况总结和代码统计
+├── REPORT_TEMPLATE.md          # 📋 实验报告模板（含思考题）
+├── least_hops.py               # ✅ 任务一：最少跳数路径
+├── shortest_delay.py           # ✅ 任务二+三：最小时延路径和故障容忍
+├── network_awareness.py        # 📡 拓扑发现和链路时延测量
+├── topo.py                     # 🌐 实验拓扑（9 台交换机）
+└── setup.sh                    # 🔨 环境设置脚本
+```
+
 **请务必先阅读各个实验的 README.md 文件！**
 
 里面包含：
@@ -138,7 +220,7 @@ lab2/
 
 ---
 
-## 📝 实验报告要点
+<!-- ## 📝 实验报告要点
 
 ### Lab 1: FAT TREE 拓扑实验报告
 
@@ -334,9 +416,9 @@ h4 → s4 → s1 (端口 3) → s3 → s1 (端口 2，环路！)
 - [ ] 截图：控制器输出的环路检测日志
 - [ ] 说明：环路检测逻辑（映射表机制）
 - [ ] 举例：具体的环路检测过程
-- [ ] 截图：ping 成功（无环路）
+- [ ] 截图：ping 成功（无环路） -->
 
----
+<!-- ---
 
 ## 💡 Lab 2 思考题解答
 
@@ -916,7 +998,7 @@ class FailoverStrategy:
 这些解答展示了：
 - 从实验到生产的完整路径
 - SDN 技术的实际应用价值
-- 网络工程的最佳实践
+- 网络工程的最佳实践 -->
 
 ---
 

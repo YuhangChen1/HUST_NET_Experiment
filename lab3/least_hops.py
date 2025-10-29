@@ -69,11 +69,41 @@ class LeastHops(app_manager.OSKenApp):
         if isinstance(ipv4_pkt, ipv4.ipv4):
             self.handle_ipv4(msg, ipv4_pkt.src, ipv4_pkt.dst, pkt_type)
 
-    def handle_arp(self, msg, in_port, dst,src, pkt,pkt_type):
+    def handle_arp(self, msg, in_port, dst, src, pkt, pkt_type):
         """
-            handle arp loop
+        Handle ARP packets and prevent ARP loop using (dpid, src_mac, dst_mac) -> in_port mapping
         """
-        pass
+        datapath = msg.datapath
+        dpid = datapath.id
+        parser = datapath.ofproto_parser
+        ofproto = datapath.ofproto
+        
+        # Create unique key for ARP loop detection
+        key = (dpid, src, dst)
+        
+        # Check for ARP loop
+        if key in self.sw:
+            if self.sw[key] != in_port:
+                # Loop detected! Drop the packet
+                self.logger.info(
+                    "ARP loop detected: dpid=%s, src=%s, dst=%s, in_port=%s (previous=%s)",
+                    dpid, src, dst, in_port, self.sw[key]
+                )
+                return  # Drop the packet
+        else:
+            # First time seeing this ARP request, record it
+            self.sw[key] = in_port
+        
+        # Flood ARP packet
+        actions = [parser.OFPActionOutput(ofproto.OFPP_FLOOD)]
+        out = parser.OFPPacketOut(
+            datapath=datapath,
+            buffer_id=msg.buffer_id,
+            in_port=in_port,
+            actions=actions,
+            data=msg.data
+        )
+        datapath.send_msg(out)
 
     def handle_ipv4(self, msg, src_ip, dst_ip, pkt_type):
         parser = msg.datapath.ofproto_parser
