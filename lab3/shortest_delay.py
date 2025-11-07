@@ -26,6 +26,7 @@ class ShortestDelay(app_manager.OSKenApp):
         self.mac_to_port = {}
         self.sw = {}
         self.path = None
+        self.last_port_status_time = {}  # Track last port status change time to avoid duplicate processing
 
     def add_flow(self, datapath, priority, match, actions, idle_timeout=0, hard_timeout=0):
         dp = datapath
@@ -66,7 +67,7 @@ class ShortestDelay(app_manager.OSKenApp):
             self.handle_arp(msg, in_port, dst_mac,src_mac, pkt,pkt_type)
 
         if isinstance(ipv4_pkt, ipv4.ipv4):
-            self.handle_ipv4(msg, ipv4_pkt.src, ipv4_pkt.dst, pkt_type)
+            self.handle_ipv4(msg, in_port, ipv4_pkt.src, ipv4_pkt.dst, pkt_type)
 
     def handle_arp(self, msg, in_port, dst, src, pkt, pkt_type):
         """
@@ -76,6 +77,14 @@ class ShortestDelay(app_manager.OSKenApp):
         dpid = datapath.id
         parser = datapath.ofproto_parser
         ofproto = datapath.ofproto
+        
+        # Get ARP packet to extract IP addresses
+        arp_pkt = pkt.get_protocol(arp.arp)
+        if arp_pkt:
+            self.logger.info(
+                "ARP packet: dpid=%s, src_ip=%s, dst_ip=%s, src_mac=%s, dst_mac=%s, in_port=%s",
+                dpid, arp_pkt.src_ip, arp_pkt.dst_ip, src, dst, in_port
+            )
         
         # Create unique key for ARP loop detection
         key = (dpid, src, dst)
@@ -103,13 +112,23 @@ class ShortestDelay(app_manager.OSKenApp):
             data=msg.data
         )
         datapath.send_msg(out)
+        self.logger.info("ARP packet flooded from switch %s, port %s", dpid, in_port)
 
-    def handle_ipv4(self, msg, src_ip, dst_ip, pkt_type):
+    def handle_ipv4(self, msg, in_port, src_ip, dst_ip, pkt_type):
         parser = msg.datapath.ofproto_parser
 
         dpid_path = self.network_awareness.shortest_path(src_ip, dst_ip,weight=self.weight)
         if not dpid_path:
+            self.logger.warning(
+                "No path found from %s to %s, topology may be re-discovering. "
+                "Topo map edges: %d, link_info entries: %d",
+                src_ip, dst_ip,
+                len(self.network_awareness.topo_map.edges()),
+                len(self.network_awareness.link_info)
+            )
             return
+        
+        self.logger.info("Path found: %s", dpid_path)
 
 
 
@@ -117,24 +136,47 @@ class ShortestDelay(app_manager.OSKenApp):
         # get port path:  h1 -> in_port, s1, out_port -> h2
         port_path = []
         for i in range(1, len(dpid_path) - 1):
-            in_port = self.network_awareness.link_info[(dpid_path[i], dpid_path[i - 1])]
-            out_port = self.network_awareness.link_info[(dpid_path[i], dpid_path[i + 1])]
-            port_path.append((in_port, dpid_path[i], out_port))
+            # Check if link_info exists (topology may be re-discovering)
+            in_key = (dpid_path[i], dpid_path[i - 1])
+            out_key = (dpid_path[i], dpid_path[i + 1])
+            
+            if in_key not in self.network_awareness.link_info or out_key not in self.network_awareness.link_info:
+                self.logger.warning(
+                    "Link info not ready for path %s, topology may be re-discovering. "
+                    "Missing keys: in_key=%s (exists: %s), out_key=%s (exists: %s). "
+                    "Total link_info entries: %d",
+                    dpid_path,
+                    in_key, in_key in self.network_awareness.link_info,
+                    out_key, out_key in self.network_awareness.link_info,
+                    len(self.network_awareness.link_info)
+                )
+                return
+            
+            switch_in_port = self.network_awareness.link_info[in_key]
+            switch_out_port = self.network_awareness.link_info[out_key]
+            port_path.append((switch_in_port, dpid_path[i], switch_out_port))
         self.show_path(src_ip, dst_ip, port_path)
 
         # Calculate path delay and RTT
         link_delay_dict = {}
         path_delay = 0.0
         
-        # Calculate delay for each link in the path
-        for i in range(1, len(dpid_path) - 1):
+        # Calculate delay for each link in the path (including host-switch edges)
+        for i in range(len(dpid_path) - 1):
             src = dpid_path[i]
             dst = dpid_path[i + 1]
             
             # Get delay from topo_map
             if self.network_awareness.topo_map.has_edge(src, dst):
                 delay = self.network_awareness.topo_map[src][dst].get('delay', 0)
-                link_delay_dict[f"s{src}->s{dst}"] = delay * 1000  # Convert to ms
+                # Format link name
+                if isinstance(src, str):  # Host IP
+                    link_name = f"h{src.split('.')[-1]}->s{dst}"
+                elif isinstance(dst, str):  # Host IP
+                    link_name = f"s{src}->h{dst.split('.')[-1]}"
+                else:  # Switch to switch
+                    link_name = f"s{src}->s{dst}"
+                link_delay_dict[link_name] = delay * 1000  # Convert to ms
                 path_delay += delay
         
         # Calculate path RTT (round-trip time = 2 * one-way delay)
@@ -147,9 +189,9 @@ class ShortestDelay(app_manager.OSKenApp):
 
         # send flow mod
         for node in port_path:
-            in_port, dpid, out_port = node
-            self.send_flow_mod(parser, dpid, pkt_type, src_ip, dst_ip, in_port, out_port)
-            self.send_flow_mod(parser, dpid, pkt_type, dst_ip, src_ip, out_port, in_port)
+            switch_in_port, dpid, switch_out_port = node
+            self.send_flow_mod(parser, dpid, pkt_type, src_ip, dst_ip, switch_in_port, switch_out_port)
+            self.send_flow_mod(parser, dpid, pkt_type, dst_ip, src_ip, switch_out_port, switch_in_port)
 
         # send packet_out
         _, dpid, out_port = port_path[-1]
@@ -179,6 +221,8 @@ class ShortestDelay(app_manager.OSKenApp):
     @set_ev_cls(ofp_event.EventOFPPortStatus, MAIN_DISPATCHER)
     def port_status_handler(self, ev):
         """Handle port status change events (link up/down)"""
+        import time
+        
         msg = ev.msg
         datapath = msg.datapath
         ofproto = datapath.ofproto
@@ -186,6 +230,23 @@ class ShortestDelay(app_manager.OSKenApp):
         if msg.reason in [ofproto.OFPPR_ADD, ofproto.OFPPR_MODIFY]:
             # Port added or modified (both link up and down are modifications)
             datapath.ports[msg.desc.port_no] = msg.desc
+            
+            # Create a unique key for this port status change
+            port_key = (datapath.id, msg.desc.port_no)
+            current_time = time.time()
+            
+            # Avoid processing duplicate events within 2 seconds
+            if port_key in self.last_port_status_time:
+                time_diff = current_time - self.last_port_status_time[port_key]
+                if time_diff < 2.0:
+                    self.logger.info(
+                        "Ignoring duplicate port status event for switch %s, port %s (last event %.2f seconds ago)",
+                        datapath.id, msg.desc.port_no, time_diff
+                    )
+                    return
+            
+            # Record this event time
+            self.last_port_status_time[port_key] = current_time
             
             self.logger.info(
                 "Port status changed on switch %s, port %s",
@@ -197,15 +258,26 @@ class ShortestDelay(app_manager.OSKenApp):
             self.network_awareness.topo_map.clear()
             self.logger.info("Topology map cleared")
             
-            # 2. Delete all flow entries
+            # 2. Clear link_info (port mappings may be invalid)
+            self.network_awareness.link_info.clear()
+            self.logger.info("Link info cleared")
+            
+            # 3. Clear port_info and port_link (topology discovery data)
+            self.network_awareness.port_info.clear()
+            self.network_awareness.port_link.clear()
+            self.logger.info("Port info and port link cleared")
+            
+            # 4. Delete all flow entries
             self.delete_all_flow()
             self.logger.info("All flow entries deleted")
             
-            # 3. Clear sw (ARP loop detection table)
+            # 5. Clear sw (ARP loop detection table)
             self.sw.clear()
             
-            # 4. Clear mac_to_port (self-learning table)
+            # 6. Clear mac_to_port (self-learning table)
             self.mac_to_port.clear()
+            
+            self.logger.info("All data structures cleared, waiting for topology re-discovery...")
             
         elif msg.reason == ofproto.OFPPR_DELETE:
             datapath.ports.pop(msg.desc.port_no, None)
@@ -273,4 +345,9 @@ class ShortestDelay(app_manager.OSKenApp):
             )
             datapath.send_msg(mod)
             
-            self.logger.info("Deleted all flows on switch %s", datapath.id)
+            # Reinstall default flow table to send packets to controller
+            match = parser.OFPMatch()
+            actions = [parser.OFPActionOutput(ofproto.OFPP_CONTROLLER, ofproto.OFPCML_NO_BUFFER)]
+            self.add_flow(datapath, 0, match, actions)
+            
+            self.logger.info("Deleted all flows on switch %s and reinstalled default flow", datapath.id)

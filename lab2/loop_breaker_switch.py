@@ -76,7 +76,7 @@ class Switch_Dict(app_manager.OSKenApp):
             # TODO: 根据实际网络拓扑，修改 target_port 为需要禁用的端口号
             # 例如：如果 s1 的端口 2 连接到 s3，可以禁用端口 2
             # 或者：如果 s1 的端口 3 连接到 s4，可以禁用端口 3
-            target_port = 2  # 请根据实际情况修改这个值
+            target_port = 3  # 请根据实际情况修改这个值（场景1用3，场景2用4）
             
             # 构造 OFPPortMod 消息来禁用端口
             port_mod = parser.OFPPortMod(
@@ -87,6 +87,11 @@ class Switch_Dict(app_manager.OSKenApp):
                 mask=ofp.OFPPC_PORT_DOWN      # 只修改 PORT_DOWN 标志
             )
             dp.send_msg(port_mod)
+            
+            # 等待消息发送完成
+            import time
+            time.sleep(0.5)
+            
             self.flag = 1  # 标记已修改，避免重复操作
             self.logger.info("Port %s on switch %s has been disabled to break the loop", target_port, dpid)
 

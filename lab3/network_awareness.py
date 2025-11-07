@@ -69,13 +69,19 @@ class NetworkAwareness(app_manager.OSKenApp):
     @set_ev_cls(ofp_event.EventOFPStateChange, [MAIN_DISPATCHER, DEAD_DISPATCHER])
     def state_change_handler(self, ev):
         dp = ev.datapath
+        if dp is None:
+            return
+        
         dpid = dp.id
+        if dpid is None:
+            return
 
         if ev.state == MAIN_DISPATCHER:
             self.switch_info[dpid] = dp
 
         if ev.state == DEAD_DISPATCHER:
-            del self.switch_info[dpid]
+            if dpid in self.switch_info:
+                del self.switch_info[dpid]
     
     @set_ev_cls(ofp_event.EventOFPPacketIn, MAIN_DISPATCHER)
     def packet_in_handler(self, ev):

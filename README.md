@@ -2,11 +2,12 @@
 
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-
+<font color="pink"><b><a href="计算机网络实验报告_这谁放在我仓库的.pdf">强烈建议阅读《计算机网络实验报告_这谁放在我仓库的.pdf》</a>，第三个实验看了包懂，不懂就联系作者。</b></font>
 > 📚 **完整的计算机网络实验集合**，涵盖网络拓扑构建、SDN 控制器、流表配置等核心内容
 
 ## ⭐ 如果这个项目对你有帮助，请给个 Star！
 
+**ALL LAB FINISHED!**
 ---
 
 ## 📂 实验内容

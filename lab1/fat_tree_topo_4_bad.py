@@ -131,8 +131,14 @@ class FatTreeTopo(Topo):
                     self.addLink(agg_switch, core_switch)
 
 
-def run_fat_tree():
-    """Run the Fat Tree topology without controller as required by experiment"""
+def run_fat_tree(ping_timeout=0.5):
+    """
+    Run the Fat Tree topology without controller as required by experiment
+    
+    Args:
+        ping_timeout: Timeout for each ping in pingall (default: 0.5s for speed)
+                      Increase to 1.0 or 2.0 if you see timeout errors
+    """
     setLogLevel('info')
 
     # Clean up any previous Mininet state
@@ -149,16 +155,28 @@ def run_fat_tree():
     # Start network without controller
     net.start()
 
+    # Configure all switches to standalone mode for L2 learning
+    info("*** Configuring switches: standalone mode (L2 learning) ***\n")
+    for switch in net.switches:
+        # Set fail-mode to standalone (L2 learning switch behavior)
+        switch.cmd('ovs-vsctl set-fail-mode', switch.name, 'standalone')
+        info(f"  {switch.name}: standalone mode enabled\n")
+
     info("*** FAT TREE Topology (k=4) Started WITHOUT Controller ***\n")
     info("Network Information:\n")
     info("- 4 Pods\n")
     info("- 16 Hosts (h1-h16)\n")
     info("- 20 Switches (8 edge + 8 aggregation + 4 core)\n")
     info("- NO Controller (as required by experiment)\n")
+    info("- Fail Mode: standalone (L2 learning switch)\n")
 
-    # Test connectivity with pingall
-    info("*** Testing connectivity with pingall (this may take time) ***\n")
-    result = net.pingAll()
+    # Test connectivity with pingall (optimized for speed)
+    info(f"*** Testing connectivity with pingall (timeout={ping_timeout}s) ***\n")
+    info("*** Note: Using shorter timeout for faster results ***\n")
+    info("*** If you see many failures, increase ping_timeout parameter ***\n")
+    # Use shorter timeout to speed up results
+    # This will make pingall complete faster but may show more failures if network is slow
+    result = net.pingAll(timeout=ping_timeout)
 
     if result == 0:
         info("*** SUCCESS: All hosts are connected! ***\n")
@@ -198,4 +216,8 @@ def run_fat_tree():
 
 
 if __name__ == '__main__':
-    run_fat_tree()
+    # Adjust ping_timeout to balance speed vs reliability:
+    # - 0.5s: Fast but may timeout on slow networks (default)
+    # - 1.0s: Balanced (recommended if 0.5s shows failures)
+    # - 2.0s: Slower but more reliable
+    run_fat_tree(ping_timeout=0.5)  # Change to 1.0 or 2.0 if needed

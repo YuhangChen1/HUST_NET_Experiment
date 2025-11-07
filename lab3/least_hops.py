@@ -2,11 +2,9 @@ from os_ken.base import app_manager
 from os_ken.controller import ofp_event
 from os_ken.controller.handler import CONFIG_DISPATCHER, MAIN_DISPATCHER, DEAD_DISPATCHER, HANDSHAKE_DISPATCHER
 from os_ken.controller.handler import set_ev_cls
-from os_ken.controller.handler import set_ev_cls
 from os_ken.ofproto import ofproto_v1_3
 from os_ken.lib.packet import packet
 from os_ken.lib.packet import ethernet, arp, ipv4, ether_types
-from os_ken.controller import ofp_event
 from os_ken.topology import event
 import sys
 from network_awareness import NetworkAwareness
@@ -64,22 +62,23 @@ class LeastHops(app_manager.OSKenApp):
 
 
         if isinstance(arp_pkt, arp.arp):
-            self.handle_arp(msg, in_port, dst_mac,src_mac, pkt,pkt_type)
+            self.handle_arp(msg, in_port, dst_mac, src_mac, pkt, pkt_type, arp_pkt)
 
         if isinstance(ipv4_pkt, ipv4.ipv4):
-            self.handle_ipv4(msg, ipv4_pkt.src, ipv4_pkt.dst, pkt_type)
+            self.handle_ipv4(msg, in_port, ipv4_pkt.src, ipv4_pkt.dst, pkt_type)
 
-    def handle_arp(self, msg, in_port, dst, src, pkt, pkt_type):
+    def handle_arp(self, msg, in_port, dst_mac, src_mac, pkt, pkt_type, arp_pkt):
         """
         Handle ARP packets and prevent ARP loop using (dpid, src_mac, dst_mac) -> in_port mapping
+        Reference: lab2 loop_detecting_switch.py
         """
         datapath = msg.datapath
         dpid = datapath.id
         parser = datapath.ofproto_parser
         ofproto = datapath.ofproto
         
-        # Create unique key for ARP loop detection
-        key = (dpid, src, dst)
+        # Create unique key for ARP loop detection: (dpid, src_mac, dst_mac)
+        key = (dpid, src_mac, dst_mac)
         
         # Check for ARP loop
         if key in self.sw:
@@ -87,14 +86,18 @@ class LeastHops(app_manager.OSKenApp):
                 # Loop detected! Drop the packet
                 self.logger.info(
                     "ARP loop detected: dpid=%s, src=%s, dst=%s, in_port=%s (previous=%s)",
-                    dpid, src, dst, in_port, self.sw[key]
+                    dpid, src_mac, dst_mac, in_port, self.sw[key]
                 )
                 return  # Drop the packet
         else:
             # First time seeing this ARP request, record it
             self.sw[key] = in_port
+            self.logger.info(
+                "Recording ARP request: dpid=%s, src=%s, dst=%s, in_port=%s",
+                dpid, src_mac, dst_mac, in_port
+            )
         
-        # Flood ARP packet
+        # Flood ARP packet (broadcast or unicast reply)
         actions = [parser.OFPActionOutput(ofproto.OFPP_FLOOD)]
         out = parser.OFPPacketOut(
             datapath=datapath,
@@ -105,7 +108,7 @@ class LeastHops(app_manager.OSKenApp):
         )
         datapath.send_msg(out)
 
-    def handle_ipv4(self, msg, src_ip, dst_ip, pkt_type):
+    def handle_ipv4(self, msg, in_port, src_ip, dst_ip, pkt_type):
         parser = msg.datapath.ofproto_parser
 
         dpid_path = self.network_awareness.shortest_path(src_ip, dst_ip,weight=self.weight)
@@ -118,9 +121,9 @@ class LeastHops(app_manager.OSKenApp):
         # get port path:  h1 -> in_port, s1, out_port -> h2
         port_path = []
         for i in range(1, len(dpid_path) - 1):
-            in_port = self.network_awareness.link_info[(dpid_path[i], dpid_path[i - 1])]
-            out_port = self.network_awareness.link_info[(dpid_path[i], dpid_path[i + 1])]
-            port_path.append((in_port, dpid_path[i], out_port))
+            switch_in_port = self.network_awareness.link_info[(dpid_path[i], dpid_path[i - 1])]
+            switch_out_port = self.network_awareness.link_info[(dpid_path[i], dpid_path[i + 1])]
+            port_path.append((switch_in_port, dpid_path[i], switch_out_port))
         self.show_path(src_ip, dst_ip, port_path)
 
         # calc path delay and print
@@ -133,9 +136,9 @@ class LeastHops(app_manager.OSKenApp):
 
         # send flow mod
         for node in port_path:
-            in_port, dpid, out_port = node
-            self.send_flow_mod(parser, dpid, pkt_type, src_ip, dst_ip, in_port, out_port)
-            self.send_flow_mod(parser, dpid, pkt_type, dst_ip, src_ip, out_port, in_port)
+            switch_in_port, dpid, switch_out_port = node
+            self.send_flow_mod(parser, dpid, pkt_type, src_ip, dst_ip, switch_in_port, switch_out_port)
+            self.send_flow_mod(parser, dpid, pkt_type, dst_ip, src_ip, switch_out_port, switch_in_port)
 
         # send packet_out
         _, dpid, out_port = port_path[-1]
